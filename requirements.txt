@@ -1,9 +1,6 @@
 streamlit
 pandas
 numpy
-joblib
-shap
-matplotlib
-PyPDF2
 scikit-learn
+PyPDF2
 openpyxl

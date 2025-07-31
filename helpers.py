@@ -1,60 +1,49 @@
 import pandas as pd
 import numpy as np
-import joblib
-import shap
-import matplotlib.pyplot as plt
+import PyPDF2
 import io
-from PyPDF2 import PdfReader
 
-model = joblib.load("model.pkl")
+def read_file(file):
+    if file.name.endswith(".csv"):
+        return pd.read_csv(file)
+    elif file.name.endswith(".xlsx") or file.name.endswith(".xls"):
+        return pd.read_excel(file)
+    elif file.name.endswith(".pdf"):
+        pdf = PyPDF2.PdfReader(file)
+        text = ''
+        for page in pdf.pages:
+            text += page.extract_text()
+        data = {'Revenue': [1000], 'EBITDA': [200], 'Net Income': [100]}  # dummy
+        return pd.DataFrame(data)
+    else:
+        raise ValueError("Unsupported file format")
 
-def process_file(uploaded_file):
+def process_files(uploaded_files):
+    df1 = read_file(uploaded_files[0])
+    df2 = read_file(uploaded_files[1])
+    df1, df2 = df1.fillna(0), df2.fillna(0)
+    return df1, df2
+
+def predict_success(df1, df2, model):
     try:
-        if uploaded_file.name.endswith('.csv'):
-            return pd.read_csv(uploaded_file)
-        elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-            return pd.read_excel(uploaded_file)
-        elif uploaded_file.name.endswith('.pdf'):
-            reader = PdfReader(uploaded_file)
-            text = "\n".join(page.extract_text() for page in reader.pages if page.extract_text())
-            data = extract_financials_from_text(text)
-            return pd.DataFrame([data])
-    except Exception:
-        return None
+        features = pd.concat([df1.mean(numeric_only=True), df2.mean(numeric_only=True)]).values.reshape(1, -1)
+        prob = model.predict_proba(features)[0][1]
+        prediction = int(prob >= 0.5)
+        return prediction, prob
+    except Exception as e:
+        raise ValueError(f"Prediction failed: {e}")
 
-def extract_financials_from_text(text):
-    return {
-        "revenue": 1000,
-        "ebitda": 200,
-        "net_income": 100,
-        "assets": 5000,
-        "liabilities": 3000
-    }
+def generate_commentary(df1, df2, prediction, prob):
+    revenue_a = df1['Revenue'].mean() if 'Revenue' in df1.columns else 'N/A'
+    revenue_b = df2['Revenue'].mean() if 'Revenue' in df2.columns else 'N/A'
+    result = "Proceed with deal 💼" if prediction == 1 else "Reconsider the deal ❌"
+    commentary = f'''
+    The predicted success probability for this M&A deal is **{prob:.2f}**.
 
-def run_model(df):
-    df = df.select_dtypes(include=[np.number]).fillna(0)
-    prediction = model.predict(df)[0]
-    probability = model.predict_proba(df)[0][1]
-    return prediction, probability
+    **Financial Highlights:**
+    - Company A average revenue: {revenue_a}
+    - Company B average revenue: {revenue_b}
 
-def generate_commentary(df, prediction, probability):
-    sentiment = "positive" if prediction == 1 else "negative"
-    return f"Based on financials, this M&A deal has a {round(probability * 100)}% chance of success. The model sees this as a {sentiment} outlook."
-
-def show_shap(df):
-    explainer = shap.Explainer(model)
-    shap_values = explainer(df)
-    fig = plt.figure()
-    shap.plots.waterfall(shap_values[0], show=False)
-    return fig
-
-def generate_downloadable_report(df, prediction, probability):
-    output = io.StringIO()
-    verdict = "Success" if prediction == 1 else "Failure"
-    output.write("M&A Deal Verdict Report\n")
-    output.write("========================\n")
-    output.write(f"Verdict: {verdict}\n")
-    output.write(f"Success Probability: {round(probability*100, 2)}%\n\n")
-    output.write("Input Summary:\n")
-    output.write(df.to_string())
-    return output.getvalue()
+    **System Verdict:** {result}
+    '''
+    return commentary
