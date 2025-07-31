@@ -1,40 +1,38 @@
-
 import streamlit as st
-import pandas as pd
+from helpers import process_file, generate_gpt_commentary, plot_shap_summary, predict_success
 import joblib
-from helpers import parse_uploaded_file, clean_and_align_data, generate_recommendations
 
 st.set_page_config(page_title="M&A Deal Verdict AI", layout="wide")
 
-@st.cache_resource
-def load_model():
-    return joblib.load("model.pkl")
-
-model = load_model()
-
 st.title("🤖 M&A Deal Verdict AI")
-st.write("Upload financial documents of two companies to evaluate M&A success probability and get intelligent recommendations.")
+st.markdown("Upload financials of two companies (CSV, Excel, or PDF) to assess M&A deal success.")
 
-uploaded_file1 = st.file_uploader("Upload Company 1 Financials (PDF, Excel, or CSV)", type=["pdf", "csv", "xls", "xlsx"])
-uploaded_file2 = st.file_uploader("Upload Company 2 Financials (PDF, Excel, or CSV)", type=["pdf", "csv", "xls", "xlsx"])
+uploaded_files = st.file_uploader("Upload files", type=["pdf", "csv", "xlsx"], accept_multiple_files=True)
 
-if uploaded_file1 and uploaded_file2:
-    try:
-        df1 = parse_uploaded_file(uploaded_file1)
-        df2 = parse_uploaded_file(uploaded_file2)
+if uploaded_files:
+    if len(uploaded_files) != 2:
+        st.warning("Please upload exactly two files.")
+    else:
+        st.success("Files uploaded successfully.")
+        try:
+            df1 = process_file(uploaded_files[0])
+            df2 = process_file(uploaded_files[1])
+            st.subheader("Parsed Financials")
+            st.write("Company 1")
+            st.dataframe(df1)
+            st.write("Company 2")
+            st.dataframe(df2)
 
-        combined_df = pd.concat([df1, df2]).reset_index(drop=True)
-        clean_df = clean_and_align_data(combined_df, model)
+            model = joblib.load("model.pkl")
+            prediction, probability = predict_success(df1, df2, model)
+            st.subheader("Prediction Result")
+            st.write(f"Success Probability: {probability:.2%}")
+            st.write("Deal Verdict:", "✅ Recommended" if prediction == 1 else "❌ Not Recommended")
 
-        prediction = model.predict(clean_df)[0]
-        probability = model.predict_proba(clean_df)[0][1]
+            st.subheader("GPT-style Deal Analysis")
+            st.markdown(generate_gpt_commentary(df1, df2, prediction, probability), unsafe_allow_html=True)
 
-        st.subheader("📊 M&A Deal Verdict")
-        st.write(f"**Prediction:** {'✅ Likely to Succeed' if prediction == 1 else '❌ Likely to Fail'}")
-        st.write(f"**Probability of Success:** {round(probability * 100, 2)}%")
-
-        st.subheader("🧠 GPT-Style Strategic Recommendations")
-        st.markdown(generate_recommendations(clean_df, prediction, probability))
-
-    except Exception as e:
-        st.error(f"An error occurred while processing the files: {str(e)}")
+            st.subheader("Explainability (SHAP)")
+            plot_shap_summary(df1, df2, model)
+        except Exception as e:
+            st.error(f"Error processing files: {str(e)}")

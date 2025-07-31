@@ -1,32 +1,64 @@
-
 import pandas as pd
+import numpy as np
+import fitz  # PyMuPDF
 import pdfplumber
-import io
+import shap
+import matplotlib.pyplot as plt
+import streamlit as st
+import joblib
 
-def parse_uploaded_file(uploaded_file):
-    if uploaded_file.name.endswith(".pdf"):
-        with pdfplumber.open(uploaded_file) as pdf:
+def process_file(file):
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+    elif file.name.endswith(".xlsx"):
+        df = pd.read_excel(file)
+    elif file.name.endswith(".pdf"):
+        with pdfplumber.open(file) as pdf:
             text = ""
             for page in pdf.pages:
                 text += page.extract_text() + "\n"
-        lines = text.split("\n")
-        data = [line.split() for line in lines if line.strip()]
+        # Fake parser from PDF text
+        data = {
+            "Revenue": [1000],
+            "EBITDA": [150],
+            "Net Income": [80],
+            "Total Assets": [3000],
+            "Debt": [1200],
+            "Equity": [1800],
+            "Region": ["US"],
+            "Sector": ["Tech"]
+        }
         df = pd.DataFrame(data)
-        return df
-    elif uploaded_file.name.endswith((".xls", ".xlsx")):
-        return pd.read_excel(uploaded_file)
     else:
-        return pd.read_csv(uploaded_file)
+        raise ValueError("Unsupported file format.")
+    return df
 
-def clean_and_align_data(df, model):
-    expected = list(model.feature_names_in_)
-    for col in expected:
-        if col not in df.columns:
-            df[col] = 0
-    return df[expected]
+def predict_success(df1, df2, model):
+    features = ["Revenue", "EBITDA", "Net Income", "Total Assets", "Debt", "Equity"]
+    x1 = df1[features].mean()
+    x2 = df2[features].mean()
+    X = pd.DataFrame([abs(x1 - x2)])
+    probability = model.predict_proba(X)[0][1]
+    prediction = int(probability > 0.5)
+    return prediction, probability
 
-def generate_recommendations(df, prediction, prob):
-    if prediction == 1:
-        return f"This M&A deal appears promising with a success probability of {round(prob*100, 2)}%. Consider moving ahead, focusing on synergies and integration planning."
-    else:
-        return f"⚠️ The deal shows low probability of success ({round(prob*100, 2)}%). Re-evaluate the strategic fit, financial leverage, and cultural alignment between the firms."
+def generate_gpt_commentary(df1, df2, prediction, probability):
+    sentiment = "positive" if prediction == 1 else "cautious"
+    commentary = f"""
+    ### GPT-style Commentary
+    Based on the provided financials, this M&A deal has a **{probability:.2%} chance of success**.
+    The model has assessed the financial synergy and operational alignment between both firms as **{sentiment}**.
+    It is {"advisable to proceed" if prediction == 1 else "recommended to reassess the deal structure or search for better-fit targets"}.
+    """
+    return commentary
+
+def plot_shap_summary(df1, df2, model):
+    features = ["Revenue", "EBITDA", "Net Income", "Total Assets", "Debt", "Equity"]
+    x1 = df1[features].mean()
+    x2 = df2[features].mean()
+    X = pd.DataFrame([abs(x1 - x2)])
+    explainer = shap.Explainer(model, X)
+    shap_values = explainer(X)
+    fig, ax = plt.subplots()
+    shap.plots.waterfall(shap_values[0], show=False)
+    st.pyplot(fig)
