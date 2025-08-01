@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import base64
 import PyPDF2
-import textract
 import io
 import shap
 import matplotlib.pyplot as plt
