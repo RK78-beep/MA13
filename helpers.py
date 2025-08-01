@@ -75,11 +75,11 @@ def plot_financials(df):
     ax.set_xticklabels(df.columns, rotation=45, ha="right")
     return fig
 
-# --- SHAP Explainer ---
+# --- SHAP Explainability ---
 def explain_with_shap(X):
-    explainer = shap.Explainer(model, feature_names=model.feature_names_in_)
+    explainer = shap.Explainer(model)
     shap_values = explainer(X)
-    fig = plt.figure()
+    fig, ax = plt.subplots()
     shap.plots.bar(shap_values[0], show=False)
     return fig
 
