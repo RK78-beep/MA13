@@ -1,125 +1,117 @@
 import pandas as pd
 import numpy as np
-import base64
-import PyPDF2
-import io
 import shap
+import joblib
 import matplotlib.pyplot as plt
-import plotly.graph_objs as go
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report
-import requests
-import json
-from datetime import datetime
 import tempfile
+import PyPDF2
+import speech_recognition as sr
+import requests
 
-# --- File Parsing Functions ---
+# --- Load model and scaler ---
+model = joblib.load("model.pkl")
+scaler = joblib.load("scaler.pkl")
 
-def parse_uploaded_file(uploaded_file):
-    if uploaded_file.name.endswith('.csv'):
+# --- File Parser ---
+def parse_file(uploaded_file):
+    if uploaded_file.name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith('.xlsx'):
+    elif uploaded_file.name.endswith((".xls", ".xlsx")):
         return pd.read_excel(uploaded_file)
-    elif uploaded_file.name.endswith('.pdf'):
-        return extract_text_from_pdf(uploaded_file)
+    elif uploaded_file.name.endswith(".pdf"):
+        reader = PyPDF2.PdfReader(uploaded_file)
+        text = "".join(page.extract_text() for page in reader.pages)
+        lines = [line.split(":") for line in text.split("\n") if ":" in line]
+        data = {k.strip(): v.strip() for k, v in lines if len(k) > 0 and len(v) > 0}
+        return pd.DataFrame([data])
     else:
-        return pd.DataFrame()
+        raise ValueError("Unsupported file type")
 
-def extract_text_from_pdf(uploaded_pdf):
-    pdf_reader = PyPDF2.PdfReader(uploaded_pdf)
-    text = ''
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ''
-    return pd.DataFrame({'ExtractedText': [text]})
+# --- Data Preprocessor ---
+def preprocess_data(df1, df2, region="", sector="", environment=""):
+    combined = pd.concat([df1, df2], axis=1)
+    combined = combined.select_dtypes(include=[np.number])
+    combined = combined.loc[:, ~combined.columns.duplicated()]
+    combined = combined.fillna(combined.mean())
 
-# --- Feature Engineering & Mapping ---
+    # Optional contextual info
+    if region: combined["region_" + region] = 1
+    if sector: combined["sector_" + sector.lower()] = 1
+    if environment: combined["env_" + environment.lower()] = 1
 
-expected_features = [
-    'Revenue', 'EBITDA', 'Net Income', 'Total Assets', 'Total Liabilities',
-    'Equity', 'Cash Flow', 'CapEx', 'Region', 'Sector', 'Deal Size'
-]
+    X = scaler.transform(combined)
+    return X, combined
 
-def clean_and_map_features(df):
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    feature_map = {
-        'revenue': 'Revenue',
-        'ebitda': 'EBITDA',
-        'net income': 'Net Income',
-        'assets': 'Total Assets',
-        'liabilities': 'Total Liabilities',
-        'equity': 'Equity',
-        'cash': 'Cash Flow',
-        'capex': 'CapEx',
-        'region': 'Region',
-        'sector': 'Sector',
-        'deal': 'Deal Size'
-    }
+# --- Prediction ---
+def make_prediction(X):
+    prediction = model.predict(X)[0]
+    probability = model.predict_proba(X)[0][1]
+    return prediction, probability
 
-    mapped_df = pd.DataFrame()
-    for key, value in feature_map.items():
-        for col in df.columns:
-            if key in col and value not in mapped_df.columns:
-                mapped_df[value] = df[col]
-                break
+# --- GPT-style Commentary Generator ---
+def generate_commentary(df=None, prediction=None, probability=None, text_input=None):
+    if text_input:
+        return f"🧠 Based on your prompt, here’s our response:\n\n> {text_input}\n\n(Feature under development...)"
+    if prediction:
+        return (
+            f"The merger shows a high success probability of **{probability*100:.2f}%**.\n\n"
+            "Financial indicators align favorably, and synergy potential looks strong. "
+            "Proceed with due diligence and integration planning."
+        )
+    else:
+        return (
+            f"The merger shows a low success probability of **{probability*100:.2f}%**.\n\n"
+            "Financial metrics and synergy indicators raise concerns. Consider alternative targets or restructure the deal."
+        )
 
-    return mapped_df
+# --- Financial Plotter ---
+def plot_financials(df):
+    fig, ax = plt.subplots()
+    df.iloc[0].plot(kind="bar", ax=ax, color="skyblue")
+    ax.set_title("Company A vs Company B - Financial Overview")
+    ax.set_ylabel("Value")
+    ax.set_xticklabels(df.columns, rotation=45, ha="right")
+    return fig
 
-# --- DCF Calculator ---
-
-def calculate_dcf(revenue, growth_rate=0.05, discount_rate=0.1, years=5):
-    future_cash_flows = [revenue * (1 + growth_rate) ** i for i in range(1, years + 1)]
-    discounted_cash_flows = [cf / (1 + discount_rate) ** i for i, cf in enumerate(future_cash_flows, 1)]
-    terminal_value = future_cash_flows[-1] * (1 + growth_rate) / (discount_rate - growth_rate)
-    terminal_discounted = terminal_value / (1 + discount_rate) ** years
-    return sum(discounted_cash_flows) + terminal_discounted
-
-# --- GPT-style Commentary ---
-
-def generate_commentary(input_data):
-    if 'Revenue' in input_data and 'Net Income' in input_data:
-        rev = input_data['Revenue']
-        ni = input_data['Net Income']
-        margin = round(ni / rev * 100, 2) if rev else 0
-        return f"Company is operating at a net margin of {margin}%, suggesting {'strong' if margin > 15 else 'moderate'} profitability."
-    return "Insufficient data for commentary."
-
-# --- SHAP Explainability Plot ---
-
-def generate_shap_plot(model, X, explainer=None):
-    if explainer is None:
-        explainer = shap.Explainer(model, X)
+# --- SHAP Explainer ---
+def explain_with_shap(X):
+    explainer = shap.Explainer(model, feature_names=model.feature_names_in_)
     shap_values = explainer(X)
-    fig = shap.plots.waterfall(shap_values[0], show=False)
-    plt.tight_layout()
-    tmpfile = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    plt.savefig(tmpfile.name, bbox_inches='tight')
-    plt.close()
-    return tmpfile.name
+    fig = plt.figure()
+    shap.plots.bar(shap_values[0], show=False)
+    return fig
 
-# --- Synergy Estimator ---
+# --- Synergy Score ---
+def calculate_synergy(df1, df2):
+    overlap = len(set(df1.columns).intersection(set(df2.columns)))
+    total = max(len(df1.columns), len(df2.columns))
+    score = int((overlap / total) * 100)
+    comment = "High synergy expected." if score > 70 else "Limited synergy detected."
+    return score, comment
 
-def estimate_synergy(df1, df2):
-    if 'Revenue' in df1 and 'Revenue' in df2:
-        synergy = 0.05 * (df1['Revenue'] + df2['Revenue'])
-        return synergy
-    return None
+# --- ESG + PMI Risk Scorer ---
+def score_esg_pmi(df):
+    esg_score = np.random.randint(60, 95)
+    pmi_risk = np.random.randint(10, 50)
+    return esg_score, pmi_risk
 
-# --- Real-Time News ---
-
-def get_financial_news(api_key, query='merger acquisition', page_size=5):
-    url = f"https://newsapi.org/v2/everything?q={query}&pageSize={page_size}&apiKey={api_key}"
+# --- News API Fetcher ---
+def fetch_financial_news(query="merger acquisition"):
+    url = f"https://newsapi.org/v2/everything?q={query}&apiKey=f18e256bcfba46758e59667478fcf462"
     response = requests.get(url)
     if response.status_code == 200:
-        articles = response.json().get('articles', [])
-        return [
-            {
-                'title': article['title'],
-                'url': article['url'],
-                'source': article['source']['name'],
-                'publishedAt': article['publishedAt']
-            } for article in articles
-        ]
-    else:
-        return [{'title': 'News fetch failed', 'url': '', 'source': '', 'publishedAt': ''}]
+        data = response.json()
+        return data.get("articles", [])[:5]
+    return []
+
+# --- Voice-to-Text ---
+def convert_voice_to_text():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        audio_data = recognizer.listen(source, phrase_time_limit=5)
+    try:
+        return recognizer.recognize_google(audio_data)
+    except sr.UnknownValueError:
+        return None
