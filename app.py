@@ -1,82 +1,90 @@
 import streamlit as st
-import pandas as pd
-import os
-import tempfile
 from helpers import (
-    load_model, process_uploaded_file, predict_success,
-    generate_commentary, show_shap_explanation,
-    synergy_analysis, esg_check, pmi_risk_score,
-    extract_text_from_voice, fetch_latest_financial_news
-)
-from datetime import datetime
-
-# Page config
-st.set_page_config(
-    page_title="M&A Deal Verdict AI",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    parse_file, preprocess_data, make_prediction, generate_commentary,
+    plot_financials, explain_with_shap, calculate_synergy,
+    score_esg_pmi, fetch_financial_news, convert_voice_to_text
 )
 
-st.title("🤖 M&A Deal Verdict AI")
-st.markdown("Upload financials of two companies or speak a prompt. Get deal success prediction, synergy, ESG, SHAP & more.")
+st.set_page_config(page_title="Fusion IQ – M&A Deal Verdict AI", layout="wide")
 
-# Sidebar
-st.sidebar.header("Upload Company Files")
-file1 = st.sidebar.file_uploader("📁 Upload Company A (CSV, Excel, PDF)", type=['csv', 'xlsx', 'xls', 'pdf'], key="file1")
-file2 = st.sidebar.file_uploader("📁 Upload Company B (CSV, Excel, PDF)", type=['csv', 'xlsx', 'xls', 'pdf'], key="file2")
-voice_prompt = st.sidebar.text_area("🎤 Or describe the deal (voice-to-text)", "")
-if st.sidebar.button("🗣️ Transcribe Voice"):
-    transcribed = extract_text_from_voice(voice_prompt)
-    st.sidebar.success(f"Transcribed: {transcribed}")
+st.title("🤖 Fusion IQ – M&A Deal Verdict AI")
+st.markdown("Upload financials of two companies to predict M&A success, synergy, risk, and generate insights.")
 
-# Load model
-model = load_model("model.pkl")
+# --- Login Simulation (Simple) ---
+st.sidebar.title("🔐 Login")
+user = st.sidebar.text_input("Username")
+pwd = st.sidebar.text_input("Password", type="password")
+if user != "admin" or pwd != "admin":
+    st.warning("Enter valid credentials (admin/admin)")
+    st.stop()
 
-# File processing
-if file1 and file2:
-    st.subheader("1️⃣ Processed Financials")
-    try:
-        df1 = process_uploaded_file(file1)
-        df2 = process_uploaded_file(file2)
-        st.success("Files uploaded and processed successfully.")
-        st.dataframe(df1.head(3))
-        st.dataframe(df2.head(3))
-    except Exception as e:
-        st.error(f"File processing failed: {e}")
-        st.stop()
+# --- Upload Section ---
+st.header("📂 Upload Financials")
+uploaded_file1 = st.file_uploader("Upload Company A File (CSV, Excel, or PDF)", type=["csv", "xlsx", "xls", "pdf"])
+uploaded_file2 = st.file_uploader("Upload Company B File (CSV, Excel, or PDF)", type=["csv", "xlsx", "xls", "pdf"])
 
-    st.subheader("2️⃣ Deal Success Prediction")
-    try:
-        success_prob, X_merged = predict_success(df1, df2, model)
-        st.metric(label="Predicted Deal Success Rate", value=f"{success_prob*100:.2f}%")
-    except Exception as e:
-        st.error(f"Prediction failed: {e}")
-        st.stop()
+region = st.selectbox("🌍 Region (Optional)", ["", "North America", "Europe", "Asia", "South America", "Other"])
+sector = st.text_input("🏢 Sector (Optional)")
+environment = st.text_input("🌱 Deal Environment (Optional)")
 
-    st.subheader("3️⃣ GPT-style Deal Summary")
-    st.markdown(generate_commentary(df1, df2, success_prob))
+if uploaded_file1 and uploaded_file2:
+    with st.spinner("Processing..."):
+        try:
+            df1 = parse_file(uploaded_file1)
+            df2 = parse_file(uploaded_file2)
 
-    st.subheader("4️⃣ Synergy & Strategic Fit")
-    synergy_score = synergy_analysis(df1, df2)
-    st.metric("Estimated Synergy Score", synergy_score)
+            X, df_processed = preprocess_data(df1, df2, region, sector, environment)
+            prediction, prob = make_prediction(X)
 
-    st.subheader("5️⃣ ESG & PMI Risk Analysis")
-    esg = esg_check(df1, df2)
-    pmi = pmi_risk_score(df1, df2)
-    st.write(f"♻️ ESG Compatibility: {esg}")
-    st.write(f"🔁 Post-Merger Integration Risk Score: {pmi}")
+            st.subheader("🔎 Verdict:")
+            st.metric("Success Probability", f"{prob*100:.2f}%")
+            st.success("✅ Likely to Succeed" if prediction else "❌ Likely to Fail")
 
-    st.subheader("6️⃣ SHAP Explainability")
-    show_shap_explanation(model, X_merged)
+            st.subheader("💬 AI Commentary")
+            st.markdown(generate_commentary(df_processed, prediction, prob))
 
-    st.success("✅ Analysis Complete")
+            st.subheader("📊 Financial Comparison")
+            plot_financials(df_processed)
 
-# Optional News Feed
-st.subheader("📰 Latest Financial News")
-news = fetch_latest_financial_news(api_key="f18e256bcfba46758e59667478fcf462")
-for article in news:
+            st.subheader("🧠 SHAP Explainability")
+            shap_plot = explain_with_shap(X)
+            st.pyplot(shap_plot)
+
+            st.subheader("🔗 Synergy Score")
+            synergy, synergy_comment = calculate_synergy(df1, df2)
+            st.metric("Synergy Score", f"{synergy}/100")
+            st.info(synergy_comment)
+
+            esg_score, pmi_score = score_esg_pmi(df_processed)
+            st.subheader("♻️ ESG Score & 🔄 PMI Risk")
+            st.metric("ESG Compatibility", f"{esg_score}%")
+            st.metric("PMI Risk", f"{pmi_score}%")
+
+        except Exception as e:
+            st.error(f"Something went wrong: {e}")
+
+# --- GPT-style Prompt ---
+st.header("💡 Ask Anything")
+prompt = st.text_input("Ask Fusion IQ a question about your deal, risks, valuation, or strategy:")
+if prompt:
+    st.markdown(generate_commentary(text_input=prompt))
+
+# --- Voice-to-Text Input ---
+st.subheader("🎙️ Or Speak Your Prompt")
+if st.button("Start Listening"):
+    text = convert_voice_to_text()
+    if text:
+        st.success(f"You said: {text}")
+        st.markdown(generate_commentary(text_input=text))
+    else:
+        st.warning("Could not recognize speech. Try again.")
+
+# --- Real-time News Section ---
+st.header("📰 Latest M&A News")
+news_items = fetch_financial_news("merger acquisition")
+for article in news_items:
     st.markdown(f"- [{article['title']}]({article['url']})")
 
-# Footer
+# --- Footer ---
 st.markdown("---")
-st.markdown("© 2025 M&A Deal Verdict AI | Built with ❤️ using Streamlit")
+st.caption("Built with 💼 for smarter M&A decisions. Fusion IQ © 2025")
